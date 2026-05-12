@@ -3,10 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
 import path from 'path';
-import cron from 'node-cron';
-import { createServer as createViteServer } from 'vite';
 import type { Server } from 'node:http';
-import dns from 'node:dns';
 import authRoutes from './routes/authRoutes';
 import eventRoutes from './routes/eventRoutes';
 import registrationRoutes from './routes/registrationRoutes';
@@ -22,8 +19,30 @@ import { sendReminderEmail } from './services/emailService';
 // Load environment variables
 dotenv.config();
 
-// Force DNS resolvers (helps with MongoDB SRV lookup on some networks)
-dns.setServers(['8.8.8.8', '8.8.4.4']);
+// MongoDB connection cache for serverless
+let cachedDb: any = null;
+
+async function connectToDatabase() {
+  if (cachedDb) {
+    return cachedDb;
+  }
+  
+  const MONGODB_URI = process.env.MONGODB_URI;
+  if (!MONGODB_URI) {
+    console.warn('MONGODB_URI not found in environment variables.');
+    return null;
+  }
+  
+  try {
+    const conn = await mongoose.connect(MONGODB_URI);
+    cachedDb = conn;
+    console.log('Connected to MongoDB');
+    return conn;
+  } catch (err) {
+    console.error('MongoDB connection error:', err);
+    return null;
+  }
+}
 
 // Create Express app
 const app = express();
@@ -34,15 +53,8 @@ async function configureApp() {
   app.use(cors());
   app.use(express.json());
 
-  // MongoDB Connection
-  const MONGODB_URI = process.env.MONGODB_URI;
-  if (MONGODB_URI) {
-    mongoose.connect(MONGODB_URI)
-      .then(() => console.log('Connected to MongoDB'))
-      .catch(err => console.error('MongoDB connection error:', err));
-  } else {
-    console.warn('MONGODB_URI not found in environment variables. Database features will not work.');
-  }
+  // Connect to database
+  await connectToDatabase();
 
   // API Routes
   app.use('/api/auth', authRoutes);
@@ -58,7 +70,59 @@ async function configureApp() {
     res.json({ status: 'ok', message: 'Server is running' });
   });
 
-  // Cron job for event reminders (runs every hour)
+  // Simple response for root
+  app.get('/', (_req, res) => {
+    res
+      .status(200)
+      .type('text/plain')
+      .send('Backend API is running. Use /api endpoints.');
+  });
+
+  return app;
+}
+
+// For Vercel deployment
+export default async function handler(req: any, res: any) {
+  try {
+    const app = await configureApp();
+    app(req, res);
+  } catch (error) {
+    console.error('Handler error:', error);
+    res.status(500).json({ 
+      error: 'Internal Server Error',
+      message: 'Serverless function failed to execute'
+    });
+  }
+}
+
+// For local development with cron jobs and Vite
+async function startServer() {
+  const app = express();
+  const PORT = Number(process.env.PORT) || 8080;
+
+  // Middleware
+  app.use(cors());
+  app.use(express.json());
+
+  // Connect to database
+  await connectToDatabase();
+
+  // API Routes
+  app.use('/api/auth', authRoutes);
+  app.use('/api/events', eventRoutes);
+  app.use('/api/registrations', registrationRoutes);
+  app.use('/api/colleges', collegeRoutes);
+  app.use('/api/departments', departmentRoutes);
+  app.use('/api/analytics', analyticsRoutes);
+  app.use('/api/college-admin', collegeAdminRoutes);
+  app.use('/api/theme', themeRoutes);
+
+  app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', message: 'Server is running' });
+  });
+
+  // Cron job for event reminders (only in local development)
+  const cron = require('node-cron');
   cron.schedule('0 * * * *', async () => {
     console.log('Running event reminder cron job...');
     try {
@@ -96,17 +160,10 @@ async function configureApp() {
     }
   });
 
-  // Frontend serving strategy:
-  // - production: serve built `dist`
-  // - dev: either use Vite middleware (when VITE_MIDDLEWARE=true) or run frontend separately via `vite`
-  if (process.env.NODE_ENV === 'production') {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
-  } else if (process.env.VITE_MIDDLEWARE === 'true') {
-    const vite = await createViteServer({
+  // Frontend serving for local development
+  if (process.env.VITE_MIDDLEWARE === 'true') {
+    const { createServer } = await import('vite');
+    const vite = await createServer({
       server: {
         middlewareMode: true,
         allowedHosts: true,
@@ -122,20 +179,6 @@ async function configureApp() {
         .send('Backend is running. Start the frontend with `npm run dev`.');
     });
   }
-
-  return app;
-}
-
-// For Vercel deployment
-export default async function handler(req: any, res: any) {
-  const app = await configureApp();
-  app(req, res);
-}
-
-// For local development
-async function startServer() {
-  const app = await configureApp();
-  const PORT = Number(process.env.PORT) || 8080;
 
   const server: Server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
