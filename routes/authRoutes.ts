@@ -20,7 +20,7 @@ const ensureDatabaseConnected = (res: express.Response) => {
 };
 
 // Helper to log audit actions
-const logAudit = async (userId: string, action: string, module: string, details: string) => {
+const logAudit = async (userId: string, action: string, module: 'COLLEGE' | 'USER' | 'EVENT' | 'SYSTEM' | 'AUTH', details: string) => {
   try {
     await AuditLog.create({ userId, action, module, details });
   } catch (err) {
