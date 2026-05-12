@@ -80,13 +80,25 @@ async function configureApp() {
 // For Vercel deployment
 module.exports = async function handler(req, res) {
   try {
+    // Log environment variables for debugging
+    console.log('Environment check:', {
+      MONGODB_URI: process.env.MONGODB_URI ? 'Set' : 'Missing',
+      JWT_SECRET: process.env.JWT_SECRET ? 'Set' : 'Missing',
+      NODE_ENV: process.env.NODE_ENV || 'Not set'
+    });
+
     const app = await configureApp();
     app(req, res);
   } catch (error) {
-    console.error('Handler error:', error);
+    console.error('Handler error details:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name
+    });
     res.status(500).json({ 
       error: 'Internal Server Error',
-      message: 'Serverless function failed to execute'
+      message: 'Serverless function failed to execute',
+      details: error.message
     });
   }
 };
