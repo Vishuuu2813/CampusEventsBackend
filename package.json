@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "Campus Events Backend API",
   "main": "server.ts",
-  "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
     "start": "tsx server.ts",
