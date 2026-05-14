@@ -22,10 +22,6 @@ const systemSettingsSchema = new mongoose.Schema({
     type: String,
     default: 'CampusSaaS'
   },
-  supportEmail: {
-    type: String,
-    default: 'support@campussaas.com'
-  },
   globalCommissionRate: {
     type: Number,
     default: 5
@@ -33,10 +29,6 @@ const systemSettingsSchema = new mongoose.Schema({
   paymentGateway: {
     provider: { type: String, default: 'Stripe' },
     active: { type: Boolean, default: true }
-  },
-  emailConfig: {
-    provider: { type: String, default: 'SendGrid' },
-    fromEmail: { type: String, default: 'noreply@campussaas.com' }
   },
   eventCategories: {
     type: [String],

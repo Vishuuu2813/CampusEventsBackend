@@ -4,7 +4,6 @@ import { Registration } from '../models/Registration';
 import { Event } from '../models/Event';
 import { User } from '../models/User';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
-import { sendRegistrationEmail } from '../services/emailService';
 
 const router = express.Router();
 
@@ -73,13 +72,6 @@ router.post('/register', authMiddleware, async (req: AuthRequest, res) => {
     // Update event registered count
     event.registeredCount += 1;
     await event.save();
-
-    // Send confirmation email
-    if (user) {
-      sendRegistrationEmail(user.email, user.name, event).catch(err => 
-        console.error('Failed to send registration email:', err)
-      );
-    }
 
     res.status(201).json(registration);
   } catch (err) {

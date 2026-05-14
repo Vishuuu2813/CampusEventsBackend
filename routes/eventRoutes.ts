@@ -2,7 +2,6 @@ import express from 'express';
 import { Event } from '../models/Event';
 import { Registration } from '../models/Registration';
 import { authMiddleware, adminMiddleware, AuthRequest } from '../middleware/auth';
-import { sendCancellationEmail } from '../services/emailService';
 
 const router = express.Router();
 
@@ -90,27 +89,13 @@ router.delete('/:id', authMiddleware, adminMiddleware, async (req: AuthRequest, 
     const event = await Event.findById(req.params.id);
     if (!event) return res.status(404).json({ message: 'Event not found' });
 
-    const eventTitle = event.title;
     const eventId = event._id;
 
-    // Find all registered users for this event
-    const registrations = await Registration.find({ event: eventId }).populate('user', 'name email');
-    
     await Event.findByIdAndDelete(eventId);
     // Also delete registrations
     await Registration.deleteMany({ event: eventId });
 
-    // Send cancellation emails
-    registrations.forEach(reg => {
-      const user = reg.user as any;
-      if (user && user.email) {
-        sendCancellationEmail(user.email, user.name, eventTitle).catch(err =>
-          console.error('Failed to send cancellation email:', err)
-        );
-      }
-    });
-
-    res.json({ message: 'Event deleted and participants notified' });
+    res.json({ message: 'Event deleted' });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Server error' });

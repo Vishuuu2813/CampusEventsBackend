@@ -2,37 +2,60 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
-import path from 'path';
 import type { Server } from 'node:http';
-import authRoutes from './routes/authRoutes';
-import eventRoutes from './routes/eventRoutes';
-import registrationRoutes from './routes/registrationRoutes';
-import collegeRoutes from './routes/collegeRoutes';
-import departmentRoutes from './routes/departmentRoutes';
-import analyticsRoutes from './routes/analyticsRoutes';
-import collegeAdminRoutes from './routes/collegeAdminRoutes';
-import themeRoutes from './routes/themeRoutes';
+import type { Router } from 'express';
+import authRoutesImport from './routes/authRoutes';
+import eventRoutesImport from './routes/eventRoutes';
+import registrationRoutesImport from './routes/registrationRoutes';
+import collegeRoutesImport from './routes/collegeRoutes';
+import departmentRoutesImport from './routes/departmentRoutes';
+import analyticsRoutesImport from './routes/analyticsRoutes';
+import collegeAdminRoutesImport from './routes/collegeAdminRoutes';
+import themeRoutesImport from './routes/themeRoutes';
 import { Event } from './models/Event';
 import { Registration } from './models/Registration';
-import { sendReminderEmail } from './services/emailService';
 
 // Load environment variables
 dotenv.config();
 
+/** Vercel / some ESM loaders expose `default` as a nested property; Express needs the actual Router. */
+function resolveRouter(mod: unknown): Router {
+  const r =
+    mod &&
+    typeof mod === 'object' &&
+    'default' in mod &&
+    typeof (mod as { default: unknown }).default === 'function'
+      ? (mod as { default: Router }).default
+      : (mod as Router);
+  if (!r || typeof (r as Router).use !== 'function') {
+    throw new Error('Invalid route module: expected default export of express.Router()');
+  }
+  return r;
+}
+
+const authRoutes = resolveRouter(authRoutesImport);
+const eventRoutes = resolveRouter(eventRoutesImport);
+const registrationRoutes = resolveRouter(registrationRoutesImport);
+const collegeRoutes = resolveRouter(collegeRoutesImport);
+const departmentRoutes = resolveRouter(departmentRoutesImport);
+const analyticsRoutes = resolveRouter(analyticsRoutesImport);
+const collegeAdminRoutes = resolveRouter(collegeAdminRoutesImport);
+const themeRoutes = resolveRouter(themeRoutesImport);
+
 // MongoDB connection cache for serverless
-let cachedDb: any = null;
+let cachedDb: mongoose.Mongoose | null = null;
 
 async function connectToDatabase() {
   if (cachedDb) {
     return cachedDb;
   }
-  
+
   const MONGODB_URI = process.env.MONGODB_URI;
   if (!MONGODB_URI) {
     console.warn('MONGODB_URI not found in environment variables.');
     return null;
   }
-  
+
   try {
     const conn = await mongoose.connect(MONGODB_URI);
     cachedDb = conn;
@@ -44,82 +67,70 @@ async function connectToDatabase() {
   }
 }
 
-// Create Express app
-const app = express();
+function mountApiRoutes(application: express.Application) {
+  application.use('/api/auth', authRoutes);
+  application.use('/api/events', eventRoutes);
+  application.use('/api/registrations', registrationRoutes);
+  application.use('/api/colleges', collegeRoutes);
+  application.use('/api/departments', departmentRoutes);
+  application.use('/api/analytics', analyticsRoutes);
+  application.use('/api/college-admin', collegeAdminRoutes);
+  application.use('/api/theme', themeRoutes);
 
-// Configure Express app
-async function configureApp() {
-  // Middleware
-  app.use(cors());
-  app.use(express.json());
-
-  // Connect to database
-  await connectToDatabase();
-
-  // API Routes
-  app.use('/api/auth', authRoutes);
-  app.use('/api/events', eventRoutes);
-  app.use('/api/registrations', registrationRoutes);
-  app.use('/api/colleges', collegeRoutes);
-  app.use('/api/departments', departmentRoutes);
-  app.use('/api/analytics', analyticsRoutes);
-  app.use('/api/college-admin', collegeAdminRoutes);
-  app.use('/api/theme', themeRoutes);
-
-  app.get('/api/health', (req, res) => {
+  application.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', message: 'Server is running' });
   });
+}
 
-  // Simple response for root
-  app.get('/', (_req, res) => {
-    res
-      .status(200)
-      .type('text/plain')
-      .send('Backend API is running. Use /api endpoints.');
-  });
+// Serverless: one Express app, configured once (repeated app.use breaks Router mounting)
+let serverlessAppPromise: Promise<express.Application> | null = null;
 
-  return app;
+function getServerlessApp(): Promise<express.Application> {
+  if (!serverlessAppPromise) {
+    serverlessAppPromise = (async () => {
+      const application = express();
+      application.use(cors());
+      application.use(express.json());
+      await connectToDatabase();
+      mountApiRoutes(application);
+      application.get('/', (_req, res) => {
+        res
+          .status(200)
+          .type('text/plain')
+          .send('Backend API is running. Use /api endpoints.');
+      });
+      return application;
+    })();
+  }
+  return serverlessAppPromise;
 }
 
 // For Vercel deployment
-export default async function handler(req: any, res: any) {
+export default async function handler(req: express.Request, res: express.Response) {
   try {
-    const app = await configureApp();
-    app(req, res);
+    const application = await getServerlessApp();
+    application(req, res);
   } catch (error) {
     console.error('Handler error:', error);
-    res.status(500).json({ 
+    const message = error instanceof Error ? error.message : 'Serverless function failed to execute';
+    res.status(500).json({
       error: 'Internal Server Error',
-      message: 'Serverless function failed to execute'
+      message: 'Serverless function failed to execute',
+      details: message,
     });
   }
 }
 
 // For local development with cron jobs and Vite
 async function startServer() {
-  const app = express();
+  const application = express();
   const PORT = Number(process.env.PORT) || 8080;
 
-  // Middleware
-  app.use(cors());
-  app.use(express.json());
+  application.use(cors());
+  application.use(express.json());
 
-  // Connect to database
   await connectToDatabase();
-
-  // API Routes
-  app.use('/api/auth', authRoutes);
-  app.use('/api/events', eventRoutes);
-  app.use('/api/registrations', registrationRoutes);
-  app.use('/api/colleges', collegeRoutes);
-  app.use('/api/departments', departmentRoutes);
-  app.use('/api/analytics', analyticsRoutes);
-  app.use('/api/college-admin', collegeAdminRoutes);
-  app.use('/api/theme', themeRoutes);
-
-  app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', message: 'Server is running' });
-  });
+  mountApiRoutes(application);
 
   // Cron job for event reminders (only in local development)
   const cron = require('node-cron');
@@ -128,31 +139,26 @@ async function startServer() {
     try {
       const tomorrow = new Date();
       tomorrow.setHours(tomorrow.getHours() + 24);
-      
+
       const startWindow = new Date(tomorrow);
       startWindow.setMinutes(0, 0, 0);
-      
+
       const endWindow = new Date(tomorrow);
       endWindow.setMinutes(59, 59, 999);
 
-      // Find events happening in the 24h window
       const upcomingEvents = await Event.find({
-        date: { $gte: startWindow, $lte: endWindow }
+        date: { $gte: startWindow, $lte: endWindow },
       });
 
       for (const event of upcomingEvents) {
         const registrations = await Registration.find({
           event: event._id,
-          reminderSent: false
+          reminderSent: false,
         }).populate('user', 'name email');
 
         for (const reg of registrations) {
-          const user = reg.user as any;
-          if (user && user.email) {
-            await sendReminderEmail(user.email, user.name, event);
-            reg.reminderSent = true;
-            await reg.save();
-          }
+          reg.reminderSent = true;
+          await reg.save();
         }
       }
     } catch (err) {
@@ -160,7 +166,6 @@ async function startServer() {
     }
   });
 
-  // Frontend serving for local development
   if (process.env.VITE_MIDDLEWARE === 'true') {
     const { createServer } = await import('vite');
     const vite = await createServer({
@@ -170,9 +175,9 @@ async function startServer() {
       },
       appType: 'spa',
     });
-    app.use(vite.middlewares);
+    application.use(vite.middlewares);
   } else {
-    app.get('/', (_req, res) => {
+    application.get('/', (_req, res) => {
       res
         .status(200)
         .type('text/plain')
@@ -180,11 +185,11 @@ async function startServer() {
     });
   }
 
-  const server: Server = app.listen(PORT, '0.0.0.0', () => {
+  const server: Server = application.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
   });
 
-  server.on('error', (err: any) => {
+  server.on('error', (err: NodeJS.ErrnoException) => {
     if (err?.code === 'EADDRINUSE') {
       console.error(`Port ${PORT} is already in use. Stop the other server or change PORT in .env.`);
       process.exit(1);
