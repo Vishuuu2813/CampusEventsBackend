@@ -2,33 +2,44 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const mongoose = require('mongoose');
-const path = require('path');
-const authRoutes = require('./routes/authRoutes');
-const eventRoutes = require('./routes/eventRoutes');
-const registrationRoutes = require('./routes/registrationRoutes');
-const collegeRoutes = require('./routes/collegeRoutes');
-const departmentRoutes = require('./routes/departmentRoutes');
-const analyticsRoutes = require('./routes/analyticsRoutes');
-const collegeAdminRoutes = require('./routes/collegeAdminRoutes');
-const themeRoutes = require('./routes/themeRoutes');
 
-// Load environment variables
 dotenv.config();
 
-// MongoDB connection cache for serverless
+/**
+ * TS `export default router` compiles to `exports.default = router`.
+ * Plain `require()` then returns `{ default: router }`, which breaks `app.use()` with:
+ * "Router.use() requires a middleware function but got a Object"
+ */
+function unwrapRouteModule(mod) {
+  if (mod == null) return mod;
+  const d = mod.default;
+  if (d != null && typeof d.use === 'function') return d;
+  if (typeof mod.use === 'function') return mod;
+  return mod;
+}
+
+const authRoutes = unwrapRouteModule(require('./routes/authRoutes'));
+const eventRoutes = unwrapRouteModule(require('./routes/eventRoutes'));
+const registrationRoutes = unwrapRouteModule(require('./routes/registrationRoutes'));
+const collegeRoutes = unwrapRouteModule(require('./routes/collegeRoutes'));
+const departmentRoutes = unwrapRouteModule(require('./routes/departmentRoutes'));
+const analyticsRoutes = unwrapRouteModule(require('./routes/analyticsRoutes'));
+const collegeAdminRoutes = unwrapRouteModule(require('./routes/collegeAdminRoutes'));
+const themeRoutes = unwrapRouteModule(require('./routes/themeRoutes'));
+
 let cachedDb = null;
 
 async function connectToDatabase() {
   if (cachedDb) {
     return cachedDb;
   }
-  
+
   const MONGODB_URI = process.env.MONGODB_URI;
   if (!MONGODB_URI) {
     console.warn('MONGODB_URI not found in environment variables.');
     return null;
   }
-  
+
   try {
     const conn = await mongoose.connect(MONGODB_URI);
     cachedDb = conn;
@@ -40,65 +51,55 @@ async function connectToDatabase() {
   }
 }
 
-// Create Express app
-const app = express();
+function mountApiRoutes(application) {
+  application.use('/api/auth', authRoutes);
+  application.use('/api/events', eventRoutes);
+  application.use('/api/registrations', registrationRoutes);
+  application.use('/api/colleges', collegeRoutes);
+  application.use('/api/departments', departmentRoutes);
+  application.use('/api/analytics', analyticsRoutes);
+  application.use('/api/college-admin', collegeAdminRoutes);
+  application.use('/api/theme', themeRoutes);
 
-// Configure Express app
-async function configureApp() {
-  // Middleware
-  app.use(cors());
-  app.use(express.json());
-
-  // Connect to database
-  await connectToDatabase();
-
-  // API Routes
-  app.use('/api/auth', authRoutes);
-  app.use('/api/events', eventRoutes);
-  app.use('/api/registrations', registrationRoutes);
-  app.use('/api/colleges', collegeRoutes);
-  app.use('/api/departments', departmentRoutes);
-  app.use('/api/analytics', analyticsRoutes);
-  app.use('/api/college-admin', collegeAdminRoutes);
-  app.use('/api/theme', themeRoutes);
-
-  app.get('/api/health', (req, res) => {
+  application.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', message: 'Server is running' });
   });
-
-  // Simple response for root
-  app.get('/', (_req, res) => {
-    res
-      .status(200)
-      .type('text/plain')
-      .send('Backend API is running. Use /api endpoints.');
-  });
-
-  return app;
 }
 
-// For Vercel deployment
+/** One Express app for serverless — do not call app.use() on every request. */
+let serverlessAppPromise = null;
+
+function getServerlessApp() {
+  if (!serverlessAppPromise) {
+    serverlessAppPromise = (async () => {
+      const application = express();
+      application.use(cors());
+      application.use(express.json());
+      await connectToDatabase();
+      mountApiRoutes(application);
+      application.get('/', (_req, res) => {
+        res
+          .status(200)
+          .type('text/plain')
+          .send('Backend API is running. Use /api endpoints.');
+      });
+      return application;
+    })();
+  }
+  return serverlessAppPromise;
+}
+
 module.exports = async function handler(req, res) {
   try {
-    // Log environment variables for debugging
-    console.log('Environment check:', {
-      MONGODB_URI: process.env.MONGODB_URI ? 'Set' : 'Missing',
-      JWT_SECRET: process.env.JWT_SECRET ? 'Set' : 'Missing',
-      NODE_ENV: process.env.NODE_ENV || 'Not set'
-    });
-
-    const app = await configureApp();
-    app(req, res);
+    const application = await getServerlessApp();
+    application(req, res);
   } catch (error) {
-    console.error('Handler error details:', {
-      message: error.message,
-      stack: error.stack,
-      name: error.name
-    });
-    res.status(500).json({ 
+    console.error('Handler error:', error);
+    const message = error instanceof Error ? error.message : 'Serverless function failed to execute';
+    res.status(500).json({
       error: 'Internal Server Error',
       message: 'Serverless function failed to execute',
-      details: error.message
+      details: message,
     });
   }
 };
