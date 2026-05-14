@@ -96,8 +96,16 @@ function getServerlessApp(): Promise<express.Application> {
       application.get('/', (_req, res) => {
         res
           .status(200)
-          .type('text/plain')
-          .send('Backend API is running. Use /api endpoints.');
+          .type('text/plain; charset=utf-8')
+          .send(
+            [
+              'Campus Events — API backend is running.',
+              '',
+              'Endpoints: /api/… (e.g. GET /api/health).',
+              '',
+              'Frontend Netlify par deploy karein; Netlify build env: VITE_API_URL = yeh backend ka URL (bina trailing slash).',
+            ].join('\n'),
+          );
       });
       return application;
     })();
