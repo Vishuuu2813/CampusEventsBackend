@@ -2,6 +2,7 @@ import express from 'express';
 import { College } from '../models/College';
 import { User } from '../models/User';
 import { AuditLog } from '../models/AuditLog';
+import { Event } from '../models/Event';
 import { authMiddleware, adminMiddleware } from '../middleware/auth';
 
 const router = express.Router();
@@ -93,13 +94,14 @@ router.get('/slug/:slug', async (req, res) => {
 
     if (!college) return res.status(404).json({ message: 'College not found' });
 
-    const { Event } = await import('../models/Event');
     const events = await Event.find({ college: college._id, status: 'published' })
       .sort({ date: 1 })
-      .limit(30);
+      .limit(30)
+      .lean();
 
     res.json({ college, events });
   } catch (err) {
+    console.error('GET /colleges/slug/:slug', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
