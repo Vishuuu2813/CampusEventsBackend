@@ -14,6 +14,10 @@ const toSlug = (value: string) =>
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-');
 
+function escapeRegex(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // Super Admin: Create a new college and its initial admin
 router.post('/', authMiddleware, async (req: any, res) => {
   if (req.user.role !== 'super_admin' && req.user.role !== 'admin') {
@@ -75,8 +79,18 @@ router.post('/', authMiddleware, async (req: any, res) => {
 // Public: Get college profile by slug + published events
 router.get('/slug/:slug', async (req, res) => {
   try {
-    const slug = toSlug(req.params.slug);
-    const college = await College.findOne({ slug }).lean();
+    const normalized = toSlug(req.params.slug);
+    let college = await College.findOne({ slug: normalized }).lean();
+
+    // Short URL: e.g. /college/jecrc when DB has slug "jecrc-university" (only if unambiguous)
+    if (!college && normalized.length >= 2) {
+      const pattern = new RegExp(`^${escapeRegex(normalized)}(-|$)`, 'i');
+      const candidates = await College.find({ slug: pattern }).limit(5).lean();
+      if (candidates.length === 1) {
+        college = candidates[0];
+      }
+    }
+
     if (!college) return res.status(404).json({ message: 'College not found' });
 
     const { Event } = await import('../models/Event');
@@ -177,6 +191,52 @@ router.patch('/:id/features', authMiddleware, async (req: any, res) => {
 
     res.json(college);
   } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Super Admin: Update college details (must be after /:id/status and /:id/features)
+router.patch('/:id', authMiddleware, async (req: any, res) => {
+  if (req.user.role !== 'super_admin' && req.user.role !== 'admin') {
+    return res.status(403).json({ message: 'Super Admin access required' });
+  }
+
+  try {
+    const college = await College.findById(req.params.id);
+    if (!college) return res.status(404).json({ message: 'College not found' });
+
+    const { name, slug, domain, address, about, logo } = req.body;
+
+    if (domain !== undefined && domain !== college.domain) {
+      const taken = await College.findOne({ domain, _id: { $ne: college._id } });
+      if (taken) return res.status(400).json({ message: 'Domain already in use' });
+      college.domain = domain;
+    }
+
+    if (slug !== undefined) {
+      const normalizedSlug = toSlug(String(slug));
+      const takenSlug = await College.findOne({ slug: normalizedSlug, _id: { $ne: college._id } });
+      if (takenSlug) return res.status(400).json({ message: 'Slug already in use' });
+      college.slug = normalizedSlug;
+    }
+
+    if (name !== undefined) college.name = name;
+    if (address !== undefined) college.address = address;
+    if (about !== undefined) college.about = about;
+    if (logo !== undefined) college.logo = logo;
+
+    await college.save();
+
+    await AuditLog.create({
+      userId: req.user.id,
+      action: 'UPDATE_COLLEGE',
+      module: 'COLLEGE',
+      details: `Updated college ${college.name}`,
+    });
+
+    res.json(college);
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ message: 'Server error' });
   }
 });
